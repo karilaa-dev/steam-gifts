@@ -137,13 +137,6 @@ export function FriendSelector({ steamId, userName, onFriendSelect, onLogout, di
                 />
                 <div className="friend-info">
                   <h3 className="friend-name">{friend.personaname}</h3>
-                  <p className="friend-status">
-                    {friend.personastate === 1 ? '🟢 Online' : 
-                     friend.personastate === 2 ? '🔴 Busy' :
-                     friend.personastate === 3 ? '🟡 Away' :
-                     friend.personastate === 4 ? '💤 Snooze' :
-                     '⚫ Offline'}
-                  </p>
                 </div>
               </div>
             ))}

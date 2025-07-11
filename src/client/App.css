@@ -337,32 +337,32 @@ body {
 
 .friends-grid {
   display: grid;
-  grid-template-columns: repeat(auto-fill, minmax(280px, 1fr));
-  gap: 1.5rem;
+  grid-template-columns: repeat(auto-fill, minmax(200px, 1fr));
+  gap: 0.5rem;
   margin-bottom: 2rem;
 }
 
 .friend-card {
   background: white;
-  border-radius: 12px;
-  padding: 1.5rem;
-  box-shadow: 0 4px 12px rgba(0, 0, 0, 0.1);
+  border-radius: 8px;
+  padding: 0.75rem;
+  box-shadow: 0 2px 8px rgba(0, 0, 0, 0.1);
   cursor: pointer;
-  transition: transform 0.2s ease, box-shadow 0.2s ease;
+  transition: transform 0.1s ease, box-shadow 0.1s ease;
   display: flex;
   align-items: center;
 }
 
 .friend-card:hover {
-  transform: translateY(-4px);
-  box-shadow: 0 8px 24px rgba(0, 0, 0, 0.15);
+  transform: translateY(-2px);
+  box-shadow: 0 4px 16px rgba(0, 0, 0, 0.15);
 }
 
 .friend-avatar {
-  width: 48px;
-  height: 48px;
+  width: 32px;
+  height: 32px;
   border-radius: 50%;
-  margin-right: 1rem;
+  margin-right: 0.75rem;
 }
 
 .friend-info {
@@ -370,8 +370,8 @@ body {
 }
 
 .friend-name {
-  font-size: 1.1rem;
-  margin-bottom: 0.25rem;
+  font-size: 1rem;
+  margin-bottom: 0;
   color: #333;
 }
 
@@ -617,7 +617,8 @@ body {
   }
   
   .friends-grid {
-    grid-template-columns: 1fr;
+    grid-template-columns: repeat(auto-fill, minmax(180px, 1fr));
+    gap: 0.375rem;
   }
   
   .games-grid {
