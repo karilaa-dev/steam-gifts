@@ -14,9 +14,17 @@ export function FriendSelector({ steamId, userName, onFriendSelect, onLogout, di
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
   const [searchTerm, setSearchTerm] = useState('');
+  const [requestController, setRequestController] = useState<AbortController | null>(null);
 
   useEffect(() => {
     loadFriends();
+    
+    // Cleanup function to abort ongoing requests
+    return () => {
+      if (requestController) {
+        requestController.abort();
+      }
+    };
   }, [steamId]);
 
   const loadFriends = async () => {
@@ -25,15 +33,44 @@ export function FriendSelector({ steamId, userName, onFriendSelect, onLogout, di
       setLoading(true);
       setError(null);
 
+      // Abort any ongoing request
+      if (requestController) {
+        requestController.abort();
+      }
+
+      // Create new abort controller for this request
+      const controller = new AbortController();
+      setRequestController(controller);
+
       console.log('🔍 DEBUG: Fetching /api/friends');
-      const response = await fetch('/api/friends');
+      const response = await fetch('/api/friends', {
+        signal: controller.signal,
+        credentials: 'include', // Include cookies for authentication
+      });
+      
       console.log('🔍 DEBUG: Response status:', response.status);
       
       if (!response.ok) {
         console.log('🔍 DEBUG: Response not ok, status:', response.status);
-        const errorData = await response.json() as { error?: string };
-        console.log('🔍 DEBUG: Error data:', errorData);
-        throw new Error(errorData.error || 'Failed to load friends');
+        
+        // Handle different error types
+        let errorMessage = 'Failed to load friends';
+        
+        try {
+          const contentType = response.headers.get('content-type');
+          if (contentType && contentType.includes('application/json')) {
+            const errorData = await response.json();
+            errorMessage = errorData.error || errorData.message || `HTTP ${response.status}`;
+          } else {
+            const text = await response.text();
+            errorMessage = text || `HTTP ${response.status}`;
+          }
+        } catch (parseError) {
+          console.error('Error parsing error response:', parseError);
+          errorMessage = `HTTP ${response.status}`;
+        }
+        
+        throw new Error(errorMessage);
       }
 
       const friendsData = await response.json() as SteamFriend[];
@@ -41,10 +78,20 @@ export function FriendSelector({ steamId, userName, onFriendSelect, onLogout, di
       console.log('🔍 DEBUG: First few friends:', friendsData.slice(0, 3));
       setFriends(friendsData);
     } catch (err) {
-      console.error('🔍 DEBUG: Error in loadFriends:', err);
-      setError(err instanceof Error ? err.message : 'Failed to load friends');
+      if (err instanceof Error) {
+        if (err.name === 'AbortError') {
+          console.log('Request was aborted');
+          return;
+        }
+        console.error('🔍 DEBUG: Error in loadFriends:', err);
+        setError(err.message);
+      } else {
+        console.error('🔍 DEBUG: Unknown error in loadFriends:', err);
+        setError('Failed to load friends');
+      }
     } finally {
       setLoading(false);
+      setRequestController(null);
     }
   };
 
@@ -121,11 +168,17 @@ export function FriendSelector({ steamId, userName, onFriendSelect, onLogout, di
               <div
                 key={friend.steamid}
                 className="friend-card"
-                onClick={() => !disabled && onFriendSelect(friend)}
+                onClick={() => {
+                  console.log('🔍 DEBUG: Friend card clicked:', friend.personaname, 'disabled:', disabled);
+                  if (!disabled) {
+                    onFriendSelect(friend);
+                  }
+                }}
                 role="button"
                 tabIndex={0}
                 onKeyDown={(e) => {
                   if ((e.key === 'Enter' || e.key === ' ') && !disabled) {
+                    console.log('🔍 DEBUG: Friend card activated via keyboard:', friend.personaname);
                     onFriendSelect(friend);
                   }
                 }}
@@ -157,4 +210,4 @@ export function FriendSelector({ steamId, userName, onFriendSelect, onLogout, di
       )}
     </div>
   );
-} 
+}

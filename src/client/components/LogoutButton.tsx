@@ -1,22 +1,12 @@
 import React from 'react';
-import type { AuthenticatedUser } from '../../server/auth';
+import { useAuth } from '../context/auth-context';
 
-interface LogoutButtonProps {
-  user: AuthenticatedUser;
-  onLogout: () => void;
-}
+export function LogoutButton() {
+  const { user, logout } = useAuth();
 
-export function LogoutButton({ user, onLogout }: LogoutButtonProps) {
-  const handleLogout = async () => {
-    try {
-      await fetch('/api/auth/logout');
-      onLogout();
-    } catch (error) {
-      console.error('Error during logout:', error);
-      // Even if the API call fails, we should still clear the local state
-      onLogout();
-    }
-  };
+  if (!user) {
+    return null;
+  }
 
   return (
     <div className="user-info">
@@ -28,7 +18,7 @@ export function LogoutButton({ user, onLogout }: LogoutButtonProps) {
         />
         <span className="user-name">{user.personaname}</span>
       </div>
-      <button onClick={handleLogout} className="logout-button">
+      <button onClick={logout} className="logout-button">
         Logout
       </button>
     </div>

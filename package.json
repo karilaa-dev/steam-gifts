@@ -14,17 +14,20 @@
   "private": true,
   "devDependencies": {
     "@types/bun": "latest",
+    "@types/steam-user": "^5.1.0",
     "typescript": "^5.8.3"
   },
   "peerDependencies": {
     "typescript": "^5.0.0"
   },
   "dependencies": {
+    "@hono/node-server": "^1.15.0",
     "@types/jsonwebtoken": "^9.0.10",
     "@types/node": "^24.0.10",
     "@types/openid": "^2.0.5",
     "@types/react": "^19.1.8",
     "@types/react-dom": "^19.1.6",
+    "@types/react-router-dom": "^5.3.3",
     "@vitejs/plugin-react": "^4.6.0",
     "concurrently": "^8.2.2",
     "cors": "^2.8.5",
@@ -35,6 +38,8 @@
     "openid": "^2.0.13",
     "react": "^19.1.0",
     "react-dom": "^19.1.0",
+    "react-router-dom": "^7.7.0",
+    "steam-user": "^5.2.3",
     "vite": "^7.0.0"
   }
 }

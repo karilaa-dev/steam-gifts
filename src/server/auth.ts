@@ -1,141 +1,88 @@
-import { config } from '../../config.ts';
-import jwt from 'jsonwebtoken';
-import type { SteamUser } from '../types/steam.ts';
+import { Hono } from 'hono';
+import { cors } from 'hono/cors';
+import { SteamAuth as SteamAuthService } from './auth-service';
+import { SteamAPI } from './steam-api';
+import { config } from '../../config';
 
-export interface AuthenticatedUser {
-  steamid: string;
-  personaname: string;
-  profileurl: string;
-  avatar: string;
-  avatarmedium: string;
-  avatarfull: string;
-}
+const app = new Hono();
+const steamAuth = new SteamAuthService();
+const steamAPI = new SteamAPI(config.steamApiKey);
 
-export class SteamAuth {
-  // Generate Steam OpenID authentication URL
-  async getAuthUrl(): Promise<string> {
-    const params = new URLSearchParams({
-      'openid.ns': 'http://specs.openid.net/auth/2.0',
-      'openid.mode': 'checkid_setup',
-      'openid.return_to': config.steamOpenIdReturnUrl,
-      'openid.realm': config.steamOpenIdRealm,
-      'openid.identity': 'http://specs.openid.net/auth/2.0/identifier_select',
-      'openid.claimed_id': 'http://specs.openid.net/auth/2.0/identifier_select'
+// Configure CORS for auth endpoints
+app.use('/*', cors({
+  origin: ['http://localhost:5173', 'http://localhost:3000'],
+  allowMethods: ['GET', 'POST'],
+  allowHeaders: ['Content-Type', 'Authorization', 'Cookie'],
+  credentials: true,
+}));
+
+// Route to initiate Steam login
+app.get('/steam', async (c) => {
+  try {
+    console.log('🔍 DEBUG: Generating Steam auth URL with config:', {
+      returnUrl: config.steamOpenIdReturnUrl,
+      realm: config.steamOpenIdRealm
     });
-
-    return `https://steamcommunity.com/openid/login?${params.toString()}`;
-  }
-
-  // Verify Steam OpenID response
-  async verifyAssertion(url: string): Promise<string | null> {
-    const urlObj = new URL(url);
-    const params = urlObj.searchParams;
-
-    // Check if the response is positive
-    if (params.get('openid.mode') !== 'id_res') {
-      return null;
-    }
-
-    // Extract claimed identity
-    const claimedId = params.get('openid.claimed_id');
-    if (!claimedId) {
-      return null;
-    }
-
-    // Verify the signature with Steam
-    const verifyParams = new URLSearchParams();
-    for (const [key, value] of params.entries()) {
-      verifyParams.set(key, value);
-    }
-    verifyParams.set('openid.mode', 'check_authentication');
-
-    try {
-      const response = await fetch('https://steamcommunity.com/openid/login', {
-        method: 'POST',
-        headers: {
-          'Content-Type': 'application/x-www-form-urlencoded',
-        },
-        body: verifyParams.toString()
-      });
-
-      const verifyText = await response.text();
-      
-      if (verifyText.includes('is_valid:true')) {
-        // Extract Steam ID from claimed identity
-        const steamId = this.extractSteamId(claimedId);
-        return steamId;
-      }
-    } catch (error) {
-      console.error('Error verifying Steam OpenID:', error);
-    }
-
-    return null;
-  }
-
-  // Extract Steam ID from OpenID identifier
-  private extractSteamId(identifier: string): string | null {
-    const match = identifier.match(/\/id\/(\d+)$/);
-    return match && match[1] ? match[1] : null;
-  }
-
-  // Generate JWT token for authenticated user
-  generateToken(user: AuthenticatedUser): string {
-    return jwt.sign(
-      {
-        steamid: user.steamid,
-        personaname: user.personaname,
-        profileurl: user.profileurl,
-        avatar: user.avatar,
-        avatarmedium: user.avatarmedium,
-        avatarfull: user.avatarfull
-      },
-      config.jwtSecret,
-      { 
-        expiresIn: '24h',
-        issuer: 'steam-gifts-app'
-      }
-    );
-  }
-
-  // Verify JWT token and return user data
-  verifyToken(token: string): AuthenticatedUser | null {
-    try {
-      const decoded = jwt.verify(token, config.jwtSecret) as any;
-      return {
-        steamid: decoded.steamid,
-        personaname: decoded.personaname,
-        profileurl: decoded.profileurl,
-        avatar: decoded.avatar,
-        avatarmedium: decoded.avatarmedium,
-        avatarfull: decoded.avatarfull
-      };
-    } catch (error) {
-      return null;
-    }
-  }
-
-  // Parse JWT token from cookie string
-  parseTokenFromCookie(cookieHeader: string | null): string | null {
-    if (!cookieHeader) return null;
     
-    const cookies = cookieHeader.split(';').map(c => c.trim());
-    const authCookie = cookies.find(c => c.startsWith('auth='));
-    
-    if (authCookie) {
-      const parts = authCookie.split('=');
-      return parts[1] || null;
-    }
-    
-    return null;
+    const authUrl = await steamAuth.getAuthUrl();
+    console.log('✅ DEBUG: Generated auth URL:', authUrl);
+    return c.redirect(authUrl);
+  } catch (error) {
+    console.error('❌ Error generating Steam auth URL:', error);
+    return c.json({ error: 'Failed to generate authentication URL' }, 500);
   }
+});
 
-  // Get authenticated user from request
-  getAuthenticatedUser(req: Request): AuthenticatedUser | null {
-    const cookieHeader = req.headers.get('cookie');
-    const token = this.parseTokenFromCookie(cookieHeader);
+// Callback route for Steam OpenID
+app.get('/steam/return', async (c) => {
+  try {
+    console.log('🔍 DEBUG: Steam auth callback received:', c.req.url);
     
-    if (!token) return null;
+    const steamId = await steamAuth.verifyAssertion(c.req.url);
+    console.log('🔍 DEBUG: Verified Steam ID:', steamId);
     
-    return this.verifyToken(token);
+    if (!steamId) {
+      console.log('❌ DEBUG: Steam verification failed');
+      return c.redirect(`/?error=auth_failed`);
+    }
+
+    const user = await steamAPI.getUserInfo(steamId);
+    console.log('🔍 DEBUG: Retrieved user info:', user?.personaname);
+    
+    if (!user) {
+      console.log('❌ DEBUG: User not found');
+      return c.redirect(`/?error=user_not_found`);
+    }
+
+    const token = steamAuth.generateToken(user);
+    console.log('✅ DEBUG: Generated token successfully');
+    
+    c.header('Set-Cookie', `auth-token=${token}; HttpOnly; Path=/; Max-Age=86400; SameSite=Lax`);
+    return c.redirect('http://localhost:5173');
+
+  } catch (error) {
+    console.error('❌ Error during Steam auth callback:', error);
+    return c.redirect('http://localhost:5173/?error=auth_error');
   }
-}
+});
+
+// Logout route
+app.post('/logout', (c) => {
+  c.header('Set-Cookie', 'auth-token=; HttpOnly; Path=/; Max-Age=0; SameSite=Lax');
+  return c.json({ success: true });
+});
+
+// Me route to check session
+app.get('/me', (c) => {
+    console.log('🔍 DEBUG: /auth/me endpoint hit, checking authentication...');
+    const user = steamAuth.getAuthenticatedUser(c.req.raw);
+    console.log('🔍 DEBUG: Authentication check result:', !!user);
+    
+    if (!user) {
+        return c.json({ error: 'Not authenticated' }, 401);
+    }
+    return c.json(user);
+});
+
+
+export default app;

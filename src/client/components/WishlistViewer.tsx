@@ -32,13 +32,7 @@ export function WishlistViewer({ wishlistData, onBack, onReset }: WishlistViewer
     }
   });
 
-  const formatPlatforms = (platforms: { windows: boolean; mac: boolean; linux: boolean }) => {
-    const available = [];
-    if (platforms.windows) available.push('🪟 Windows');
-    if (platforms.mac) available.push('🍎 Mac');
-    if (platforms.linux) available.push('🐧 Linux');
-    return available.length > 0 ? available.join(' ') : '❓ Unknown';
-  };
+  
 
   return (
     <div className="wishlist-viewer">
@@ -117,7 +111,6 @@ export function WishlistViewer({ wishlistData, onBack, onReset }: WishlistViewer
                 />
                 <div className="game-info">
                   <h3 className="game-title">{game.name}</h3>
-                  <p className="game-platforms">{formatPlatforms(game.platforms)}</p>
                   <p className="wishlist-position">#{game.wishlist_priority + 1} on wishlist</p>
                 </div>
               </div>

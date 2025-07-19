@@ -63,6 +63,7 @@ export interface SteamUser {
   avatar: string;
   avatarmedium: string;
   avatarfull: string;
+  communityvisibilitystate: number;
 }
 
 export interface WishlistResponse {

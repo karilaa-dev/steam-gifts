@@ -1,14 +1,8 @@
 import React from 'react';
+import { useAuth } from '../context/auth-context';
 
-interface LoginButtonProps {
-  disabled?: boolean;
-}
-
-export function LoginButton({ disabled = false }: LoginButtonProps) {
-  const handleLogin = () => {
-    if (disabled) return;
-    window.location.href = '/api/auth/steam';
-  };
+export function LoginButton() {
+  const { login, isLoading } = useAuth();
 
   return (
     <div className="login-container">
@@ -17,8 +11,8 @@ export function LoginButton({ disabled = false }: LoginButtonProps) {
         <p>To view your friends' wishlists, please sign in with your Steam account.</p>
         
         <button 
-          onClick={handleLogin}
-          disabled={disabled}
+          onClick={login}
+          disabled={isLoading}
           className="steam-login-button"
         >
           <img 

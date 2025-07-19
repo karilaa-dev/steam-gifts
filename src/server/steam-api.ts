@@ -1,13 +1,253 @@
 import fetch from 'node-fetch';
+import type { RequestInit } from 'node-fetch';
 import type { SteamFriend, SteamUser, WishlistItem, RegionalPrice, WishlistGameWithPrices } from '../types/steam.ts';
+
+interface GameDetails {
+  appid: number;
+  name: string;
+  header_image: string;
+  short_description: string;
+  platforms: {
+    windows: boolean;
+    mac: boolean;
+    linux: boolean;
+  };
+  price_overview?: {
+    currency: string;
+    initial: number;
+    final: number;
+    discount_percent: number;
+    initial_formatted: string;
+    final_formatted: string;
+  };
+}
+
+interface RegionalPriceData {
+  currency: string;
+  initial: number;
+  final: number;
+  discount_percent: number;
+  initial_formatted: string;
+  final_formatted: string;
+}
 
 export class SteamAPI {
   private apiKey: string;
   private baseUrl = 'https://api.steampowered.com';
   private storeUrl = 'https://store.steampowered.com';
+  private gameDetailsCache = new Map<number, GameDetails>();
+  private regionalPriceCache = new Map<string, RegionalPrice>();
 
   constructor(apiKey: string) {
     this.apiKey = apiKey;
+  }
+
+  async getWishlist(steamId: string): Promise<WishlistItem[]> {
+    try {
+      console.log('🔍 DEBUG: Starting wishlist fetch for Steam ID:', steamId);
+      
+      // Try the public Steam Web API endpoint
+      const publicApiUrl = `${this.baseUrl}/IWishlistService/GetWishlist/v1/?steamid=${steamId}`;
+      console.log('🔍 DEBUG: Using public Steam API:', publicApiUrl);
+      
+      const publicResponse = await fetch(publicApiUrl, {
+        headers: {
+          'Accept': 'application/json',
+          'User-Agent': 'Steam-Gifts-App/1.0'
+        }
+      });
+      
+      console.log('🔍 DEBUG: Public API response status:', publicResponse.status);
+      
+      if (publicResponse.ok) {
+        const data = await publicResponse.json() as any;
+        const items = data.response?.items || [];
+        
+        if (items.length > 0) {
+          console.log(`🔍 DEBUG: Found ${items.length} items via public API`);
+          
+          // Enhance with game details and regional pricing
+          const enhancedItems = await Promise.all(
+            items.map(async (item: any) => {
+              const gameDetails = await this.getGameDetails(item.appid);
+              return {
+                appid: item.appid,
+                name: gameDetails?.name || `App ${item.appid}`,
+                header_image: gameDetails?.header_image || '',
+                price_overview: gameDetails?.price_overview || null,
+                platforms: gameDetails?.platforms || { windows: false, mac: false, linux: false },
+                wishlist_priority: item.priority || 0
+              };
+            })
+          );
+          
+          return enhancedItems.sort((a, b) => a.wishlist_priority - b.wishlist_priority);
+        }
+      }
+      
+      // Fallback to authenticated approach
+      return this.getWishlistFromSteamCommunity(steamId);
+      
+    } catch (error) {
+      console.error('🔍 DEBUG: Error in getWishlist:', error);
+      throw error;
+    }
+  }
+
+  async getGameDetails(appid: number): Promise<GameDetails | null> {
+    try {
+      // Check cache first
+      if (this.gameDetailsCache.has(appid)) {
+        return this.gameDetailsCache.get(appid)!;
+      }
+
+      const url = `${this.storeUrl}/api/appdetails?appids=${appid}&l=english`;
+      console.log('🔍 DEBUG: Fetching game details for appid:', appid);
+      
+      const response = await fetch(url, {
+        headers: {
+          'Accept': 'application/json',
+          'User-Agent': 'Steam-Gifts-App/1.0'
+        }
+      });
+
+      if (!response.ok) {
+        console.log('🔍 DEBUG: Game details API response not ok:', response.status);
+        return null;
+      }
+
+      const data = await response.json() as any;
+      
+      if (data[appid.toString()]?.success) {
+        const gameData = data[appid.toString()].data;
+        const gameDetails: GameDetails = {
+          appid,
+          name: gameData.name || `App ${appid}`,
+          header_image: gameData.header_image || '',
+          short_description: gameData.short_description || '',
+          platforms: {
+            windows: gameData.platforms?.windows || false,
+            mac: gameData.platforms?.mac || false,
+            linux: gameData.platforms?.linux || false
+          },
+          price_overview: gameData.price_overview || undefined
+        };
+        
+        // Cache for 1 hour
+        this.gameDetailsCache.set(appid, gameDetails);
+        return gameDetails;
+      }
+      
+      return null;
+    } catch (error) {
+      console.error('🔍 DEBUG: Error fetching game details:', error);
+      return null;
+    }
+  }
+
+  async getRegionalPrices(appid: number): Promise<RegionalPrice[]> {
+    const regions = [
+      { code: 'US', name: 'United States', currency: 'USD' },
+      { code: 'RU', name: 'Russia', currency: 'RUB' },
+      { code: 'UA', name: 'Ukraine', currency: 'UAH' }
+    ];
+
+    try {
+      const regionalPrices: RegionalPrice[] = [];
+
+      for (const region of regions) {
+        const cacheKey = `${appid}-${region.code}`;
+        
+        // Check cache first
+        if (this.regionalPriceCache.has(cacheKey)) {
+          regionalPrices.push(this.regionalPriceCache.get(cacheKey)!);
+          continue;
+        }
+
+        const url = `${this.storeUrl}/api/appdetails?appids=${appid}&cc=${region.code}&l=english`;
+        
+        const response = await fetch(url, {
+          headers: {
+            'Accept': 'application/json',
+            'User-Agent': 'Steam-Gifts-App/1.0'
+          }
+        });
+
+        if (response.ok) {
+          const data = await response.json() as any;
+          
+          if (data[appid.toString()]?.success) {
+            const gameData = data[appid.toString()].data;
+            const priceData = gameData.price_overview;
+            
+            if (priceData) {
+              const regionalPrice: RegionalPrice = {
+                region: region.code,
+                regionName: region.name,
+                currency: region.currency,
+                price: priceData.final_formatted,
+                discount: priceData.discount_percent > 0 ? priceData.discount_percent : undefined,
+                originalPrice: priceData.discount_percent > 0 ? priceData.initial_formatted : undefined
+              };
+              
+              regionalPrices.push(regionalPrice);
+              this.regionalPriceCache.set(cacheKey, regionalPrice);
+            }
+          }
+        }
+      }
+
+      return regionalPrices;
+    } catch (error) {
+      console.error('🔍 DEBUG: Error fetching regional prices:', error);
+      return [];
+    }
+  }
+
+  async getWishlistWithPrices(steamId: string): Promise<WishlistGameWithPrices[]> {
+    try {
+      const wishlist = await this.getWishlist(steamId);
+      
+      const enhancedWishlist = await Promise.all(
+        wishlist.map(async (game) => {
+          const regionalPrices = await this.getRegionalPrices(game.appid);
+          return {
+            ...game,
+            regionalPrices
+          };
+        })
+      );
+      
+      return enhancedWishlist;
+    } catch (error) {
+      console.error('🔍 DEBUG: Error getting wishlist with prices:', error);
+      throw error;
+    }
+  }
+
+  private async getWishlistFromSteamCommunity(steamId: string): Promise<WishlistItem[]> {
+    try {
+      const url = `https://steamcommunity.com/profiles/${steamId}/wishlist/`;
+      console.log('🔍 DEBUG: Using community profiles:', url);
+      
+      const response = await fetch(url, {
+        headers: {
+          'Accept': 'text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8',
+          'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36'
+        }
+      });
+      
+      if (!response.ok) {
+        throw new Error(`Community endpoint returned ${response.status}`);
+      }
+      
+      console.log('🔍 DEBUG: Community endpoint requires HTML parsing');
+      return [];
+      
+    } catch (error) {
+      console.error('🔍 DEBUG: Community endpoint error:', error);
+      return [];
+    }
   }
 
   async getUserInfo(steamId: string): Promise<SteamUser | null> {
@@ -37,7 +277,8 @@ export class SteamAPI {
           profileurl: player.profileurl,
           avatar: player.avatar,
           avatarmedium: player.avatarmedium,
-          avatarfull: player.avatarfull
+          avatarfull: player.avatarfull,
+          communityvisibilitystate: player.communityvisibilitystate
         };
       }
       console.log('🔍 DEBUG: No players found in response');
@@ -60,11 +301,6 @@ export class SteamAPI {
       
       if (!response.ok) {
         console.log('🔍 DEBUG: Steam Friends API response not ok:', response.status);
-        if (response.status === 401) {
-          console.log('🔍 DEBUG: 401 Unauthorized - friends list may be private');
-        } else if (response.status === 404) {
-          console.log('🔍 DEBUG: 404 Not Found - user may not exist');
-        }
         return [];
       }
       
@@ -90,10 +326,7 @@ export class SteamAPI {
         console.log('🔍 DEBUG: Mapped friends count:', mappedFriends.length);
         return mappedFriends;
       } else {
-        console.log('🔍 DEBUG: No friends found in response or response format unexpected');
-        if (data.friendslist) {
-          console.log('🔍 DEBUG: Friendslist object keys:', Object.keys(data.friendslist));
-        }
+        console.log('🔍 DEBUG: No friends found in response');
         return [];
       }
     } catch (error) {
@@ -117,201 +350,84 @@ export class SteamAPI {
     }
   }
 
-  async getWishlist(steamId: string): Promise<WishlistItem[]> {
+  async getProxiedWishlist(steamId: string, cookie: string): Promise<any> {
     try {
-      console.log('🔍 DEBUG: Starting wishlist fetch for Steam ID:', steamId);
+      const wishlistUrl = `${this.storeUrl}/api/wishlist/?steamid=${steamId}&count=1000&language=english`;
+      console.log('🔍 DEBUG: Using authenticated wishlist API:', wishlistUrl);
       
-      // Steam wishlist endpoint - public endpoint, no API key needed
-      const wishlistUrl = `${this.storeUrl}/wishlist/profiles/${steamId}/wishlistdata/`;
-      console.log('🔍 DEBUG: Wishlist URL:', wishlistUrl);
-      
-      const response = await fetch(wishlistUrl);
-      
-      console.log('🔍 DEBUG: Wishlist response status:', response.status);
-      console.log('🔍 DEBUG: Wishlist response headers:', Object.fromEntries(response.headers.entries()));
+      const response = await fetch(wishlistUrl, {
+        headers: {
+          'Cookie': cookie,
+          'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36',
+          'Accept': 'application/json',
+          'Referer': 'https://store.steampowered.com/'
+        },
+      });
+
+      console.log('🔍 DEBUG: Authenticated response status:', response.status);
       
       if (!response.ok) {
-        console.log('🔍 DEBUG: Wishlist response not ok, status:', response.status);
-        throw new Error(`Wishlist not accessible: ${response.status}`);
+        throw new Error(`Failed to fetch authenticated wishlist: ${response.status}`);
       }
-      
-      // Check if response is actually JSON
-      const contentType = response.headers.get('content-type');
-      console.log('🔍 DEBUG: Content type:', contentType);
-      
-      const text = await response.text();
-      console.log('🔍 DEBUG: Response text length:', text.length);
-      console.log('🔍 DEBUG: Response text preview:', text.substring(0, 200) + '...');
-      
-      // Check for Steam login page or privacy message
-      const isLoginPage = text.includes('g_steamID') || text.includes('steamLoginSecure');
-      const isPrivacyPage = text.includes('This profile is private') || text.includes('wishlist is private');
-      const isErrorPage = text.includes('error') || text.includes('not found');
-      
-      console.log('🔍 DEBUG: Response analysis:');
-      console.log('  - Is login page:', isLoginPage);
-      console.log('  - Is privacy page:', isPrivacyPage);
-      console.log('  - Is error page:', isErrorPage);
-      console.log('  - Content type is JSON:', contentType?.includes('application/json'));
-      
-      if (!contentType || !contentType.includes('application/json')) {
-        console.log('🔍 DEBUG: Content type is not JSON - wishlist likely private');
-        
-        if (isLoginPage) {
-          throw new Error('Steam login required - wishlist is private');
-        } else if (isPrivacyPage) {
-          throw new Error('This Steam profile wishlist is private');
-        } else if (isErrorPage) {
-          throw new Error('Steam user not found or wishlist unavailable');
-        } else {
-          throw new Error('Wishlist is private or user not found');
-        }
-      }
-      
-      if (!text.trim()) {
-        console.log('🔍 DEBUG: Empty response text');
-        throw new Error('Empty wishlist or user not found');
-      }
-      
-      let data: any;
-      try {
-        data = JSON.parse(text);
-        console.log('🔍 DEBUG: Successfully parsed JSON, keys:', Object.keys(data).length);
-      } catch (parseError) {
-        console.error('🔍 DEBUG: JSON Parse Error:', parseError);
-        console.error('🔍 DEBUG: Response text:', text.substring(0, 200) + '...');
-        throw new Error('Wishlist is private or user not found');
-      }
-      
-      const wishlistItems: WishlistItem[] = Object.entries(data).map(([appid, gameData]: [string, any]) => ({
-        appid: parseInt(appid),
-        name: gameData.name,
-        header_image: gameData.header_image || '',
-        price_overview: gameData.price_overview,
-        platforms: gameData.platforms || { windows: false, mac: false, linux: false },
-        wishlist_priority: gameData.priority || 0
-      }));
 
-      console.log('🔍 DEBUG: Processed wishlist items count:', wishlistItems.length);
-      
-      // Sort by wishlist priority (Steam's internal ordering)
-      return wishlistItems.sort((a, b) => a.wishlist_priority - b.wishlist_priority);
+      return await response.json();
     } catch (error) {
-      console.error('🔍 DEBUG: Error in getWishlist:', error);
+      console.error('🔍 DEBUG: Error fetching authenticated wishlist:', error);
       throw error;
     }
   }
 
-  async getRegionalPrices(appId: number, regions: string[]): Promise<RegionalPrice[]> {
-    const prices: RegionalPrice[] = [];
-    
-    for (const region of regions) {
-      try {
-        const response = await fetch(
-          `${this.storeUrl}/api/appdetails?appids=${appId}&cc=${region}&filters=price_overview`
-        );
-        
-        if (!response.ok) {
-          throw new Error(`Failed to fetch price data: ${response.status}`);
-        }
-        
-        const text = await response.text();
-        let data: any;
-        try {
-          data = JSON.parse(text);
-        } catch (parseError) {
-          console.error(`Price parse error for region ${region}:`, parseError);
-          throw new Error('Invalid price data format');
-        }
-        
-        if (data[appId]?.success && data[appId]?.data?.price_overview) {
-          const priceData = data[appId].data.price_overview;
-          prices.push({
-            region,
-            regionName: this.getRegionName(region),
-            currency: priceData.currency,
-            price: priceData.final_formatted,
-            discount: priceData.discount_percent || 0,
-            originalPrice: priceData.discount_percent > 0 ? priceData.initial_formatted : undefined
-          });
-        } else {
-          // Game might be free or not available in this region
-          prices.push({
-            region,
-            regionName: this.getRegionName(region),
-            currency: 'N/A',
-            price: 'Not Available'
-          });
-        }
-        
-        // Add delay to avoid rate limiting
-        await new Promise(resolve => setTimeout(resolve, 100));
-      } catch (error) {
-        console.error(`Error fetching price for region ${region}:`, error);
-        prices.push({
-          region,
-          regionName: this.getRegionName(region),
-          currency: 'N/A',
-          price: 'Error'
-        });
-      }
+  async processAuthenticatedWishlist(rawData: any): Promise<WishlistItem[]> {
+    try {
+      const items = rawData.response?.items || [];
+      
+      // Enhance with game details and regional pricing
+      const enhancedItems = await Promise.all(
+        items.map(async (item: any) => {
+          const gameDetails = await this.getGameDetails(item.appid);
+          return {
+            appid: item.appid,
+            name: gameDetails?.name || item.name || `App ${item.appid}`,
+            header_image: gameDetails?.header_image || item.header_image || '',
+            price_overview: gameDetails?.price_overview || item.price_overview || null,
+            platforms: gameDetails?.platforms || item.platforms || { windows: false, mac: false, linux: false },
+            wishlist_priority: item.priority || item.display_order || 0
+          };
+        })
+      );
+      
+      return enhancedItems.sort((a, b) => a.wishlist_priority - b.wishlist_priority);
+    } catch (error) {
+      console.error('🔍 DEBUG: Error processing authenticated wishlist:', error);
+      throw error;
     }
-    
-    return prices;
   }
 
-  async getWishlistWithPrices(steamId: string, regions: string[]): Promise<WishlistGameWithPrices[]> {
-    const wishlist = await this.getWishlist(steamId);
-    const gamesWithPrices: WishlistGameWithPrices[] = [];
-
-    for (const game of wishlist) {
-      const regionalPrices = await this.getRegionalPrices(game.appid, regions);
-      gamesWithPrices.push({
-        ...game,
-        regionalPrices
-      });
+  async processAuthenticatedWishlistWithPrices(rawData: any): Promise<WishlistGameWithPrices[]> {
+    try {
+      const items = rawData.response?.items || [];
+      
+      const enhancedItems = await Promise.all(
+        items.map(async (item: any) => {
+          const gameDetails = await this.getGameDetails(item.appid);
+          const regionalPrices = await this.getRegionalPrices(item.appid);
+          
+          return {
+            appid: item.appid,
+            name: gameDetails?.name || item.name || `App ${item.appid}`,
+            header_image: gameDetails?.header_image || item.header_image || '',
+            price_overview: gameDetails?.price_overview || item.price_overview || null,
+            platforms: gameDetails?.platforms || item.platforms || { windows: false, mac: false, linux: false },
+            wishlist_priority: item.priority || item.display_order || 0,
+            regionalPrices
+          };
+        })
+      );
+      
+      return enhancedItems.sort((a, b) => a.wishlist_priority - b.wishlist_priority);
+    } catch (error) {
+      console.error('🔍 DEBUG: Error processing authenticated wishlist with prices:', error);
+      throw error;
     }
-
-    return gamesWithPrices;
   }
-
-  private getRegionName(regionCode: string): string {
-    const regionNames: { [key: string]: string } = {
-      'US': 'United States',
-      'EU': 'European Union',
-      'RU': 'Russia',
-      'UK': 'United Kingdom',
-      'CA': 'Canada',
-      'AU': 'Australia',
-      'JP': 'Japan',
-      'CN': 'China',
-      'BR': 'Brazil',
-      'IN': 'India'
-    };
-    return regionNames[regionCode] || regionCode;
-  }
-
-  // Extract Steam ID from Steam profile URL or validate Steam ID64
-  static extractSteamId(input: string): string | null {
-    // Check if it's already a valid Steam ID64 (17 digits starting with 7656119)
-    if (/^7656119\d{10}$/.test(input)) {
-      return input;
-    }
-
-    // Extract from Steam profile URL
-    const profileMatch = input.match(/steamcommunity\.com\/profiles\/(\d+)/);
-    if (profileMatch && profileMatch[1]) {
-      return profileMatch[1];
-    }
-
-    // Extract from Steam ID URL (custom URL)
-    const idMatch = input.match(/steamcommunity\.com\/id\/([^\/]+)/);
-    if (idMatch) {
-      // This would need additional API call to resolve custom URL to Steam ID64
-      // For now, return null as we need the numeric Steam ID64
-      return null;
-    }
-
-    return null;
-  }
-} 
+}
